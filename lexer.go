@@ -29,6 +29,8 @@ package lexer
 
 import (
 	"errors"
+	"io"
+	"io/ioutil"
 	"strings"
 	"unicode/utf8"
 )
@@ -45,11 +47,16 @@ const (
 type Token struct {
 	Type  TokenType
 	Value string
+	Pos   int
+	Line  int
+	Col   int
 }
 
 type L struct {
 	source          string
 	start, position int
+	line            int
+	lastlinePos     int
 	startState      StateFunc
 	Err             error
 	tokens          chan Token
@@ -58,12 +65,15 @@ type L struct {
 }
 
 // New creates a returns a lexer ready to parse the given source code.
-func New(src string, start StateFunc) *L {
+func New(r io.Reader, start StateFunc) *L {
+	src, _ := ioutil.ReadAll(r)
+
 	return &L{
-		source:     src,
+		source:     string(src),
 		startState: start,
 		start:      0,
 		position:   0,
+		line:       1,
 		rewind:     newRuneStack(),
 	}
 }
@@ -72,6 +82,7 @@ func New(src string, start StateFunc) *L {
 func (l *L) Start() {
 	// Take half the string length as a buffer size.
 	buffSize := len(l.source) / 2
+
 	if buffSize <= 0 {
 		buffSize = 1
 	}
@@ -82,6 +93,7 @@ func (l *L) Start() {
 func (l *L) StartSync() {
 	// Take half the string length as a buffer size.
 	buffSize := len(l.source) / 2
+
 	if buffSize <= 0 {
 		buffSize = 1
 	}
@@ -100,6 +112,9 @@ func (l *L) Emit(t TokenType) {
 	tok := Token{
 		Type:  t,
 		Value: l.Current(),
+		Pos:   l.position,
+		Line:  l.line,
+		Col:   l.start - l.lastlinePos,
 	}
 	l.tokens <- tok
 	l.start = l.position
@@ -196,4 +211,40 @@ func (l *L) run() {
 		state = state(l)
 	}
 	close(l.tokens)
+}
+
+func (l *L) SkipWhitespace() {
+	var r rune
+	for {
+		r = l.Next()
+		if IsSpace(r) {
+			l.Ignore()
+			continue
+		}
+		if IsNewLine(r) {
+			l.lastlinePos = l.position
+			l.line = l.line + 1
+			l.Ignore()
+			continue
+		}
+		l.Rewind()
+		break
+	}
+}
+
+// isSpace reports whether r is a space character.
+func IsSpace(r rune) bool {
+	return r == ' ' || r == '\t'
+}
+
+// isSpace reports whether r is a space character.
+func IsNewLine(r rune) bool {
+	return r == '\n' || r == '\r'
+}
+
+func IsLetter(ch rune) bool {
+	return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+}
+func IsDigit(ch rune) bool {
+	return ch >= '0' && ch <= '9'
 }
